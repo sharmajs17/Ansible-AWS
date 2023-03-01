@@ -1,0 +1,9 @@
+---
+  - name: Key
+    hosts: local
+    tasks:
+    - name: Install key ...
+      authorized_key:
+        user: root
+        state: present
+        key: "{{lookup('file','/root/AWS_Ansible/ec2/tasks/key.pem')}}"

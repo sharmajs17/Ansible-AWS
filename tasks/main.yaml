@@ -1,0 +1,101 @@
+---
+#- name: Ansible test
+- hosts: localhost
+  vars_files:
+  - /root/AWS_Ansible/ec2/vars/main.yml
+#  - vars/vars.yml
+  tasks:
+  - name: create VPC
+    amazon.aws.ec2_vpc_net:
+      name: "{{ vpc_name }}"
+      cidr_block: "{{ vpc_cidr }}"
+      region: "{{ region }}"
+      state: present
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+    register: ec2_vpc_net_result
+
+  - name: associate subnet to the VPC
+    ec2_vpc_subnet:
+     state: present
+     vpc_id: "{{ ec2_vpc_net_result.vpc.id }}"
+     region: "{{ region }}"
+     cidr: "{{ subnet_cidr }}"
+     aws_access_key: "{{ aws_access_key }}"
+     aws_secret_key: "{{ aws_secret_key }}"
+     map_public: yes
+     resource_tags:
+       Name: "{{ subnet_name }}"
+    register: subnet_result
+
+  - name: create IGW
+    ec2_vpc_igw:
+     vpc_id: "{{ ec2_vpc_net_result.vpc.id }}"
+     region: "{{ region }}"
+     aws_access_key: "{{ aws_access_key }}"
+     aws_secret_key: "{{ aws_secret_key }}"
+     state: "present"
+     tags:
+       Name: "{{ igw_name }}"
+    register: igw
+
+  - name: Route IGW
+    amazon.aws.ec2_vpc_route_table:
+     vpc_id: "{{ ec2_vpc_net_result.vpc.id }}"
+     region: "{{ region }}"
+     aws_access_key: "{{ aws_access_key }}"
+     aws_secret_key: "{{ aws_secret_key }}"
+     subnets:
+       - "{{ subnet_result.subnet.id }}"
+     routes:
+       - dest: 0.0.0.0/0
+         gateway_id: "{{ igw.gateway_id  }}"
+     tags:
+       Name: "{{ route_name }}"
+    register: public_route_table
+
+  - name: Create Security Group
+    ec2_group:
+     name: Web DMZ
+     description: DMZ Security Group
+     vpc_id: "{{ ec2_vpc_net_result.vpc.id }}"
+     region: "{{ region }}"
+     aws_access_key: "{{ aws_access_key }}"
+     aws_secret_key: "{{ aws_secret_key }}"
+     rules:
+       - proto: tcp
+         ports:
+         - 80
+         cidr_ip: 0.0.0.0/0
+       - proto: tcp
+         ports:
+         - 22
+         cidr_ip: 0.0.0.0/0
+    register: security_group
+
+  - name: Create key ...
+    amazon.aws.ec2_key:
+      name: keyfile
+#      key_material: "{{lookup('file','/root/AWS_Ansible/ec2/tasks/key')}}"
+    register: ec2_key_result
+
+  - name: Save private key
+    copy:
+       content: "{{ ec2_key_result.key.private_key }}"
+       dest: "./keyfile.pem"
+       mode: 0600
+    when: ec2_key_result.changed
+
+  - name: launching AWS instance using Ansible
+    community.aws.ec2_instance:
+      key_name: keyfile
+      instance_type: t2.micro
+      image_id: ami-0557a15b87f6559cf
+      region: "{{ region }}"
+      wait: yes
+      count: 1
+      security_group: "{{ security_group.group_id }}"
+      vpc_subnet_id: "{{ subnet_result.subnet.id}}"
+#      assign_public_ip: yes
+      aws_access_key: "{{aws_access_key}}"
+      aws_secret_key: "{{aws_secret_key}}"

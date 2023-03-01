@@ -1,0 +1,25 @@
+---
+#vars/main.yml
+
+aws_access_key: "AKIARLZMBU6VDKQUABOS"
+aws_secret_key: "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"
+region: "us-east-1"
+
+# VPC
+vpc_cidr: 10.10.0.0/24
+vpc_name: "Ansible VPC"
+
+# Subnet
+subnet_name: "Ansible Subnet"
+subnet_cidr: 10.10.0.0/26
+
+# Internet Gateway Name
+igw_name: "Traffic IGW"
+
+securitygroup_name: "Ansible Security Group"
+route_name: "route table"
+ec2_tag: "WebServer"
+
+#The local path to which we would save our EC2 Private Key
+ec2_key_directory: "/root/AWS_Ansible/ec2"
+keypair_name: "ec2_key_pair"

@@ -1,0 +1,6 @@
+[local]
+
+localhost
+
+#[hosts]
+#key_name = /root/AWS_Ansible/ec2/tasks/key.pem
