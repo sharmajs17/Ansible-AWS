@@ -1,0 +1,252 @@
+---
+#- name: Ansible test
+- hosts: localhost
+  vars_files:
+  - /root/AWS_Ansible/ec2_vpc_lb/vars/main.yml
+#  - vars/vars.yml
+  gather_facts: false
+  tasks:
+  - name: create VPC
+    amazon.aws.ec2_vpc_net:
+      name: "{{ vpc_name }}"
+      cidr_block: "{{ vpc_cidr }}"
+      region: "{{ region }}"
+      state: present
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+    register: ec2_vpc_net_result
+
+  - name: associate subnet to the VPC
+    ec2_vpc_subnet:
+     state: present
+     vpc_id: "{{ ec2_vpc_net_result.vpc.id }}"
+     region: "{{ region }}"
+     cidr: "{{ subnet_cidr_public }}"
+     aws_access_key: "{{ aws_access_key }}"
+     aws_secret_key: "{{ aws_secret_key }}"
+     map_public: yes
+     resource_tags:
+       Name: "{{ public_subnet }}"
+    register: subnet_result
+
+  - name: Create private subnet
+    ec2_vpc_subnet:
+      state: 'present'
+      vpc_id: "{{ ec2_vpc_net_result.vpc.id }}"
+      cidr: "{{ subnet_cidr_private }}"
+      region: "{{ region }}"
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+      map_public: false
+      resource_tags:
+        Name: "{{ private_subnet }}"
+    register: private_subnet
+
+  - name: create IGW
+    ec2_vpc_igw:
+     vpc_id: "{{ ec2_vpc_net_result.vpc.id }}"
+     region: "{{ region }}"
+     aws_access_key: "{{ aws_access_key }}"
+     aws_secret_key: "{{ aws_secret_key }}"
+     state: "present"
+     tags:
+       Name: "{{ igw_name }}"
+    register: igw
+
+    #Create Elastic IP
+#  - name: allocate a new elastic IP without associating it to anything
+#    ec2_eip:
+#      region: "{{ region }}"
+#      aws_access_key: "{{ aws_access_key }}"
+#      aws_secret_key: "{{ aws_secret_key }}"
+#      in_vpc: yes
+#      reuse_existing_ip_allowed: yes
+#      tag_name: "{{vpc_name}} EIP IP"
+#      state: present
+#    register: eip
+#  - debug:
+#      msg: "{{eip.public_ip}}"
+
+  - name: Create NAT Gateway
+    ec2_vpc_nat_gateway:
+      region: "{{ region }}"
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+      state: 'present'
+      subnet_id: "{{ subnet_result.subnet.id }}"
+      wait:  yes
+#      eip_address: "{{eip.public_ip}}"
+      if_exist_do_not_create: true
+#      release_eip:  true
+    register: result_nat_gateway
+
+  - name: Route IGW
+    amazon.aws.ec2_vpc_route_table:
+     vpc_id: "{{ ec2_vpc_net_result.vpc.id }}"
+     region: "{{ region }}"
+     aws_access_key: "{{ aws_access_key }}"
+     aws_secret_key: "{{ aws_secret_key }}"
+     subnets:
+       - "{{ subnet_result.subnet.id }}"
+     routes:
+       - dest: 0.0.0.0/0
+         gateway_id: "{{ igw.gateway_id  }}"
+     tags:
+       Name: "{{ route_name_public }}"
+    register: public_route_table
+
+  - name: Set up private subnet route table
+    ec2_vpc_route_table:
+      vpc_id: "{{ ec2_vpc_net_result.vpc.id }}"
+      region: "{{ region }}"
+      subnets: "{{ private_subnet.subnet.id }}"
+      routes:
+        - dest:         '0.0.0.0/0'
+          gateway_id:   "{{ result_nat_gateway.nat_gateway_id }}"
+    register: result_private_route
+
+  - name: Create Security Group
+    ec2_group:
+     name: public_sg
+     description: Public Security Group
+     vpc_id: "{{ ec2_vpc_net_result.vpc.id }}"
+     region: "{{ region }}"
+     aws_access_key: "{{ aws_access_key }}"
+     aws_secret_key: "{{ aws_secret_key }}"
+     rules:
+       - proto: tcp
+         ports:
+         - 80
+         cidr_ip: 0.0.0.0/0
+       - proto: tcp
+         ports:
+         - 22
+         cidr_ip: 0.0.0.0/0
+    register: security_group
+
+  - name: Create Security Group
+    ec2_group:
+     name: private_sg
+     description: private Security Group
+     vpc_id: "{{ ec2_vpc_net_result.vpc.id }}"
+     region: "{{ region }}"
+     aws_access_key: "{{ aws_access_key }}"
+     aws_secret_key: "{{ aws_secret_key }}"
+     rules:
+       - proto: tcp
+         ports:
+         - 80
+         cidr_ip: 10.0.1.0/24
+       - proto: tcp
+         ports:
+         - 22
+         cidr_ip: 10.0.1.0/24
+       - proto: ICMP
+         from_port: 8
+         to_port: 0
+         cidr_ip: 10.0.1.0/24
+    register: security_group_private
+
+
+#  - name: create ec2 VPC Network access control list
+    # create the access control list with ingress and egress ports 
+#    ec2_vpc_nacl:
+#      aws_access_key: "{{ aws_access_key }}"
+#      aws_secret_key: "{{ aws_secret_key }}"
+#      vpc_id: "{{ ec2_vpc_net_result.vpc.id }}"
+#      region: "{{ region }}"
+#      state: "present"
+#      name: "{{ acl_name }}"
+#      subnets: [ "{{ subnet_result.subnet.id }}" ]
+#      tags:
+#        Name: "{{ acl_name }}"
+#        Description: "{{ acl_name }}"      # ingress acl rules
+#      ingress:
+        # rule no, protocol, allow/deny, cidr, icmp_type, icmp_code, port from, port to
+        # allow ingress port 22
+#        - [100, 'tcp', 'allow', "{{ destinationCidrBlock }}", null, null, 22, 22]
+        # allow ingress port 80
+#        - [200, 'tcp', 'allow', "{{ destinationCidrBlock }}", null, null, 80, 80]
+        # allow icmp
+#        - [300, 'icmp', 'allow', "{{ destinationCidrBlock }}", 0, 8]
+        # allow ingress ephemeral ports
+#        - [400, 'tcp', 'allow', "{{ destinationCidrBlock }}", null, null, 1024, 65535]
+        # egress acl rules
+#      egress:
+        # rule no, protocol, allow/deny, cidr, icmp_type, icmp_code, port from, port to
+        # allow egres port 22 
+#        - [100, 'tcp', 'allow', "{{ destinationCidrBlock }}", null, null, 22, 22]
+        # allow egres port 80 
+#        - [200, 'tcp', 'allow', "{{ destinationCidrBlock }}", null, null, 80, 80]
+        # allow egress ephemeral ports
+#        - [300, 'tcp', 'allow', "{{ destinationCidrBlock }}", null, null, 1024, 65535]
+#    register: acl_results
+
+  - name: Create key ...
+    amazon.aws.ec2_key:
+      name: keyfile_publicEC2
+#      key_material: "{{lookup('file','/root/AWS_Ansible/ec2/tasks/key')}}"
+    register: ec2_key_result
+
+  - name: Save private key
+    copy:
+       content: "{{ ec2_key_result.key.private_key }}"
+       dest: "./keyfile_publicEC2.pem"
+       mode: 0600
+    when: ec2_key_result.changed
+
+  - name: launching AWS public instance
+    community.aws.ec2_instance:
+      key_name: keyfile_publicEC2
+      instance_type: t2.micro
+      image_id: ami-0557a15b87f6559cf
+      region: "{{ region }}"
+      wait: yes
+      count: 1
+      security_group: "{{ security_group.group_id }}"
+      vpc_subnet_id: "{{ subnet_result.subnet.id}}"
+#     assign_public_ip: yes
+#      eip_address: "{{eip.public_ip}}"
+      aws_access_key: "{{aws_access_key}}"
+      aws_secret_key: "{{aws_secret_key}}"
+    register: pub_instance
+
+#  - name: Allocating elastic IP to instance
+#    ec2_eip:
+#      aws_access_key: "{{aws_access_key}}"
+#      aws_secret_key: "{{aws_secret_key}}"
+#      in_vpc: yes
+#      reuse_existing_ip_allowed: yes
+#      state: present
+#      region: "{{ region }}"
+#      instance_id: "{{ pub_instance.eip }}"
+#    register: instance_eip
+#  - debug: var=instance_eip.public_ip
+
+########## private ec2 ##########
+  - name: Create key ...
+    amazon.aws.ec2_key:
+      name: keyfile_privateEC2
+#      key_material: "{{lookup('file','/root/AWS_Ansible/ec2/tasks/key')}}"
+    register: ec2_privatekey_result
+
+  - name: Save private key
+    copy:
+       content: "{{ ec2_privatekey_result.key.private_key }}"
+       dest: "./keyfile_privateEC2.pem"
+       mode: 0600
+    when: ec2_privatekey_result.changed
+
+  - name: launching PRivate AWS instance
+    community.aws.ec2_instance:
+      key_name: keyfile_privateEC2
+      instance_type: t2.micro
+      image_id: ami-0557a15b87f6559cf
+      region: "{{ region }}"
+      wait: yes
+      count: 1
+      security_group: "{{ security_group_private.group_id }}"
+      vpc_subnet_id: "{{ private_subnet.subnet.id}}"
+#      assign_public_ip: yes
+      aws_access_key: "{{aws_access_key}}"
+      aws_secret_key: "{{aws_secret_key}}"
